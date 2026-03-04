@@ -81,7 +81,7 @@ agg["recency"] = (max_date - agg["last_purchase"]).dt.days
 agg["lifespan_days"] = (agg["last_purchase"] - agg["first_purchase"]).dt.days + 1
 agg["avg_order_value"] = agg["monetary"] / agg["frequency"]
 agg["purchase_frequency_per_day"] = agg["frequency"] / agg["lifespan_days"]
-agg["clv"] = agg["avg_order_value"] * agg["purchase_frequency_per_day"] * 365
+agg["clv"] = agg["monetary"]
 
 features = agg[["recency", "frequency", "monetary", "avg_basket", "unique_products", "clv", "lifespan_days"]].copy()
 
@@ -282,10 +282,10 @@ output["dbscan_cluster"] = db_labels
 output["hierarchical_cluster"] = hc_labels
 
 cluster_names = {
-    0: "Moderate Recent",
-    1: "VIP Champions",
-    2: "High Value Outliers",
-    3: "At-Risk"
+    0: "Occasional Buyers",
+    1: "Regular Loyalists",
+    2: "Premium Bulk Buyers",
+    3: "One-Time Shoppers"
 }
 output["cluster_name"] = output["kmeans_cluster"].map(cluster_names)
 
@@ -310,38 +310,52 @@ for cluster_id in range(best_k):
     print(f"  Avg Lifespan: {cluster_data['lifespan_days'].mean():.0f} days")
     print(f"  Avg Products Purchased: {cluster_data['unique_products'].mean():.0f}")
     
-    if cluster_id == 1:
-        print(f"\n  ➤ BEST CUSTOMERS! Frequent buyers, recent purchases, high spending")
-        print(f"  ➤ Strategy: VIP loyalty programs, exclusive offers")
-    elif cluster_id == 2:
-        print(f"\n  ➤ One-time big spenders, haven't returned")
-        print(f"  ➤ Strategy: Retention campaigns, personalized follow-up")
-    elif cluster_id == 3:
-        print(f"\n  ➤ Customers showing signs of churn")
-        print(f"  ➤ Strategy: Win-back campaigns, special offers")
+    if cluster_id == 2:
+        print(f"\n  ➤ PREMIUM BULK BUYERS: Highest CLV (${cluster_data['clv'].mean():,.0f}), most orders ({cluster_data['frequency'].mean():.1f}), most products ({cluster_data['unique_products'].mean():.0f})")
+        print(f"  ➤ Strategy: Wholesale accounts, bulk discounts, priority support")
+    elif cluster_id == 1:
+        print(f"\n  ➤ REGULAR LOYALISTS: Good engagement (${cluster_data['clv'].mean():,.0f} CLV), {cluster_data['frequency'].mean():.1f} orders, recent activity ({cluster_data['recency'].mean():.0f} days)")
+        print(f"  ➤ Strategy: Loyalty programs, personalized offers, referral bonuses")
+    elif cluster_id == 0:
+        print(f"\n  ➤ OCCASIONAL BUYERS: Moderate CLV (${cluster_data['clv'].mean():,.0f}), some engagement ({cluster_data['frequency'].mean():.1f} orders)")
+        print(f"  ➤ Strategy: Nurture with product recommendations, upselling campaigns")
     else:
-        print(f"\n  ➤ Regular customers with moderate engagement")
-        print(f"  ➤ Strategy: Upselling, bundle deals")
+        print(f"\n  ➤ ONE-TIME SHOPPERS: Low CLV (${cluster_data['clv'].mean():,.0f}), only {cluster_data['frequency'].mean():.1f} order(s), haven't returned ({cluster_data['recency'].mean():.0f} days ago)")
+        print(f"  ➤ Strategy: Win-back campaigns, special comeback offers")
 
 cluster_descriptions = pd.DataFrame({
-    'Cluster': range(best_k),
-    'Name': [cluster_names[i] for i in range(best_k)],
-    'Customers': [len(output[output['kmeans_cluster']==i]) for i in range(best_k)],
-    'Avg_CLV': [output[output['kmeans_cluster']==i]['clv'].mean() for i in range(best_k)],
-    'Avg_Spending': [output[output['kmeans_cluster']==i]['monetary'].mean() for i in range(best_k)],
-    'Avg_Frequency': [output[output['kmeans_cluster']==i]['frequency'].mean() for i in range(best_k)],
-    'Avg_Recency': [output[output['kmeans_cluster']==i]['recency'].mean() for i in range(best_k)],
-    'Description': [
-        'Regular customers with moderate engagement, recent purchases',
-        'BEST customers - frequent buyers, very recent, highest spending',
-        'One-time big spenders, haven\'t returned yet',
-        'Customers who haven\'t purchased recently, need re-engagement'
+    'Cluster_ID': range(best_k),
+    'Segment_Name': [cluster_names[i] for i in range(best_k)],
+    'Number_of_Customers': [len(output[output['kmeans_cluster']==i]) for i in range(best_k)],
+    'Avg_CLV_USD': [round(output[output['kmeans_cluster']==i]['clv'].mean(), 2) for i in range(best_k)],
+    'Avg_Total_Spending_USD': [round(output[output['kmeans_cluster']==i]['monetary'].mean(), 2) for i in range(best_k)],
+    'Avg_Orders': [round(output[output['kmeans_cluster']==i]['frequency'].mean(), 1) for i in range(best_k)],
+    'Avg_Recency_Days': [round(output[output['kmeans_cluster']==i]['recency'].mean(), 0) for i in range(best_k)],
+    'Avg_Lifespan_Days': [round(output[output['kmeans_cluster']==i]['lifespan_days'].mean(), 0) for i in range(best_k)],
+    'Avg_Products_Purchased': [round(output[output['kmeans_cluster']==i]['unique_products'].mean(), 0) for i in range(best_k)],
+    'Business_Strategy': [
+        'Nurture with product recommendations, upselling campaigns',
+        'Loyalty programs, personalized offers, referral bonuses',
+        'Wholesale accounts, bulk discounts, priority support',
+        'Win-back campaigns, special comeback offers'
     ]
 })
 cluster_descriptions.to_csv(os.path.join(REPORTS_DIR, "cluster_descriptions.csv"), index=False)
 print(f"\n\nCluster descriptions saved to: reports/cluster_descriptions.csv")
 
 clv_profile = output.groupby("kmeans_cluster")[["clv", "lifespan_days", "recency", "frequency", "monetary"]].agg(['mean', 'median', 'std'])
+clv_profile.columns = ['_'.join(col).strip() for col in clv_profile.columns.values]
+clv_profile = clv_profile.rename(columns={
+    'clv_mean': 'CLV_Mean_USD', 'clv_median': 'CLV_Median_USD', 'clv_std': 'CLV_StdDev',
+    'lifespan_days_mean': 'Avg_Lifespan_Days', 'lifespan_days_median': 'Median_Lifespan_Days', 'lifespan_days_std': 'Lifespan_StdDev',
+    'recency_mean': 'Avg_Recency_Days', 'recency_median': 'Median_Recency_Days', 'recency_std': 'Recency_StdDev',
+    'frequency_mean': 'Avg_Orders', 'frequency_median': 'Median_Orders', 'frequency_std': 'Orders_StdDev',
+    'monetary_mean': 'Avg_Spending_USD', 'monetary_median': 'Median_Spending_USD', 'monetary_std': 'Spending_StdDev'
+})
+clv_profile['Segment_Name'] = [cluster_names[i] for i in clv_profile.index]
+clv_profile = clv_profile[['Segment_Name', 'CLV_Mean_USD', 'CLV_Median_USD', 'CLV_StdDev', 
+                            'Avg_Orders', 'Median_Orders', 'Avg_Spending_USD', 'Median_Spending_USD',
+                            'Avg_Recency_Days', 'Median_Recency_Days', 'Avg_Lifespan_Days', 'Median_Lifespan_Days']]
 clv_profile.to_csv(os.path.join(REPORTS_DIR, "clv_analysis.csv"))
 
 kmeans_profile = output.groupby("kmeans_cluster")[["recency", "frequency", "monetary", "avg_basket", "unique_products", "clv"]].agg(['mean', 'std', 'median', 'min', 'max'])

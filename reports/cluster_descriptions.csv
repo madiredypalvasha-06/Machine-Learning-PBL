@@ -1,5 +1,5 @@
-Cluster,Name,Customers,Avg_CLV,Avg_Spending,Avg_Frequency,Avg_Recency,Description
-0,Moderate Recent,1237,3907.5395707942953,1355.0269943411479,4.040420371867421,49.47210994341148,"Regular customers with moderate engagement, recent purchases"
-1,VIP Champions,651,13545.39070755001,8833.174101382489,14.417818740399385,13.872503840245775,"BEST customers - frequent buyers, very recent, highest spending"
-2,High Value Outliers,1595,164898.06584676512,461.73448965517235,1.0752351097178683,154.42633228840126,"One-time big spenders, haven't returned yet"
-3,At-Risk,855,3581.0791065928183,875.2943403508772,2.8456140350877193,94.20701754385965,"Customers who haven't purchased recently, need re-engagement"
+Cluster_ID,Segment_Name,Number_of_Customers,Avg_CLV_USD,Avg_Total_Spending_USD,Avg_Orders,Avg_Recency_Days,Avg_Lifespan_Days,Avg_Products_Purchased,Business_Strategy
+0,Occasional Buyers,295,2412.73,2412.73,2.3,122.0,75.0,8.0,"Nurture with product recommendations, upselling campaigns"
+1,Regular Loyalists,1638,981.88,981.88,3.3,65.0,174.0,60.0,"Loyalty programs, personalized offers, referral bonuses"
+2,Premium Bulk Buyers,881,6978.47,6978.47,12.2,19.0,286.0,152.0,"Wholesale accounts, bulk discounts, priority support"
+3,One-Time Shoppers,1524,290.88,290.88,1.1,156.0,7.0,22.0,"Win-back campaigns, special comeback offers"
