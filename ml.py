@@ -53,14 +53,70 @@ df = df.copy()
 if "CustomerID" in df.columns:
     df = df.dropna(subset=["CustomerID"])
 
-if "InvoiceNo" in df.columns:
-    df = df[~df["InvoiceNo"].astype(str).str.startswith("C")]
+df["TotalPrice"] = df["Quantity"] * df["UnitPrice"]
 
-if "Quantity" in df.columns:
-    df = df[df["Quantity"] > 0]
+print("\n" + "="*60)
+print("FRAUD DETECTION ANALYSIS")
+print("="*60)
 
-if "UnitPrice" in df.columns:
-    df = df[df["UnitPrice"] > 0]
+df_original = df.copy()
+
+cancelled_mask = df["InvoiceNo"].astype(str).str.startswith("C")
+df_cancelled = df[cancelled_mask].copy()
+df_valid = df[~cancelled_mask].copy()
+
+print(f"Total Records: {len(df)}")
+print(f"Cancelled Orders: {len(df_cancelled)} ({len(df_cancelled)/len(df)*100:.1f}%)")
+print(f"Valid Orders: {len(df_valid)} ({len(df_valid)/len(df)*100:.1f}%)")
+
+df_cancelled["InvoiceNo"] = df_cancelled["InvoiceNo"].astype(str).str.replace("C", "", regex=False)
+df_cancelled["Quantity"] = df_cancelled["Quantity"].abs()
+
+cancelled_by_customer = df_cancelled.groupby("CustomerID").agg({
+    "InvoiceNo": "nunique",
+    "TotalPrice": ["sum", "mean"],
+    "Quantity": "sum"
+}).reset_index()
+cancelled_by_customer.columns = ["CustomerID", "Cancel_Count", "Cancel_Amount", "Avg_Cancel_Value", "Cancel_Quantity"]
+cancelled_by_customer = cancelled_by_customer.sort_values("Cancel_Amount", ascending=False)
+cancelled_by_customer.to_csv(os.path.join(REPORTS_DIR, "fraud_customers.csv"), index=False)
+
+high_cancel_customers = cancelled_by_customer[cancelled_by_customer["Cancel_Count"] >= 5]
+print(f"\nCustomers with 5+ cancellations: {len(high_cancel_customers)}")
+print("Top 5 Cancellation Customers:")
+print(high_cancel_customers.head())
+
+product_cancel_rates = df_cancelled.groupby("Description").agg({
+    "Quantity": "sum",
+    "InvoiceNo": "nunique"
+}).reset_index()
+product_cancel_rates.columns = ["Product", "Cancel_Qty", "Cancel_Orders"]
+
+valid_product_qty = df_valid.groupby("Description")["Quantity"].sum().reset_index()
+valid_product_qty.columns = ["Product", "Valid_Qty"]
+
+product_analysis = product_cancel_rates.merge(valid_product_qty, on="Product", how="outer").fillna(0)
+product_analysis["Cancel_Rate"] = product_analysis["Cancel_Qty"] / (product_analysis["Cancel_Qty"] + product_analysis["Valid_Qty"] + 1) * 100
+product_analysis = product_analysis.sort_values("Cancel_Rate", ascending=False)
+product_analysis.to_csv(os.path.join(REPORTS_DIR, "product_cancellation_analysis.csv"), index=False)
+print("\nTop 5 Most Cancelled Products (by rate):")
+print(product_analysis.head())
+
+plt.figure(figsize=(10, 5))
+top_cancel_products = product_analysis[product_analysis["Cancel_Orders"] >= 10].head(10)
+plt.barh(range(len(top_cancel_products)), top_cancel_products["Cancel_Rate"].values)
+plt.yticks(range(len(top_cancel_products)), top_cancel_products["Product"].values[:10])
+plt.xlabel('Cancellation Rate (%)')
+plt.title('Products with Highest Cancellation Rates')
+plt.tight_layout()
+plt.savefig(os.path.join(FIG_DIR, "fraud_products.png"), dpi=150)
+plt.close()
+
+print("\nFraud detection reports saved!")
+
+df = df[~df["InvoiceNo"].astype(str).str.startswith("C")]
+df = df[df["Quantity"] > 0]
+df = df[df["UnitPrice"] > 0]
 
 print("Clean shape:", df.shape)
 
@@ -90,6 +146,35 @@ print(f"Average CLV: ${agg['clv'].mean():.2f}")
 print(f"Median CLV: ${agg['clv'].median():.2f}")
 print(f"Max CLV: ${agg['clv'].max():.2f}")
 print(f"Average Customer Lifespan: {agg['lifespan_days'].mean():.1f} days")
+
+print("\n=== Enhanced Fraud Detection with Customer Metrics ===")
+fraud_indicators = cancelled_by_customer.merge(
+    agg[["monetary", "frequency", "clv"]].reset_index(),
+    on="CustomerID", how="left"
+)
+fraud_indicators = fraud_indicators.fillna(0)
+fraud_indicators["Cancel_Ratio"] = fraud_indicators["Cancel_Count"] / (fraud_indicators["frequency"] + fraud_indicators["Cancel_Count"] + 1)
+fraud_indicators["Cancel_to_Spend_Ratio"] = fraud_indicators["Cancel_Amount"] / (fraud_indicators["monetary"] + 1)
+
+high_risk = fraud_indicators[
+    (fraud_indicators["Cancel_Count"] >= 3) & 
+    (fraud_indicators["Cancel_Ratio"] > 0.3)
+].sort_values("Cancel_Amount", ascending=False)
+high_risk.to_csv(os.path.join(REPORTS_DIR, "high_risk_customers.csv"), index=False)
+print(f"High Risk Customers (3+ cancellations, 30%+ cancel ratio): {len(high_risk)}")
+
+fraud_summary = pd.DataFrame({
+    "Metric": ["Total Cancelled Orders", "Unique Cancelled Customers", "Customers with 5+ Cancellations", "High Risk Customers", "Total Cancel Amount"],
+    "Value": [
+        len(df_cancelled),
+        df_cancelled["CustomerID"].nunique(),
+        len(cancelled_by_customer[cancelled_by_customer["Cancel_Count"] >= 5]),
+        len(high_risk),
+        f"${abs(df_cancelled['TotalPrice'].sum()):,.2f}"
+    ]
+})
+fraud_summary.to_csv(os.path.join(REPORTS_DIR, "fraud_summary.csv"), index=False)
+print(fraud_summary)
 
 features_log = np.log1p(features)
 scaler = StandardScaler()
@@ -717,6 +802,103 @@ plt.title('Top 10 Frequent Itemsets (Single Items)')
 plt.tight_layout()
 plt.savefig(os.path.join(FIG_DIR, "frequent_itemsets.png"), dpi=150)
 plt.close()
+
+print("\n" + "="*60)
+print("ADDITIONAL ANALYSES")
+print("="*60)
+
+print("\n--- RFM Scoring (1-5 Scale) ---")
+output['R_Score'] = pd.qcut(output['recency'].rank(method='first'), q=5, labels=[5, 4, 3, 2, 1])
+output['F_Score'] = pd.qcut(output['frequency'].rank(method='first'), q=5, labels=[1, 2, 3, 4, 5])
+output['M_Score'] = pd.qcut(output['monetary'].rank(method='first'), q=5, labels=[1, 2, 3, 4, 5])
+output['RFM_Score'] = output['R_Score'].astype(int) + output['F_Score'].astype(int) + output['M_Score'].astype(int)
+
+rfm_segments = {
+    (5, 5): "Champions",
+    (5, 4): "Loyal Customers",
+    (4, 4): "Potential Loyalist",
+    (5, 3): "Recent Customers",
+    (3, 3): "Needs Attention",
+    (3, 2): "At Risk",
+    (2, 2): "Hibernating",
+    (1, 1): "Lost"
+}
+output['RFM_Segment'] = output.apply(lambda x: rfm_segments.get((int(x['R_Score']), int(x['F_Score'])), "Others"), axis=1)
+
+rfm_summary = output.groupby('RFM_Segment').agg({
+    'clv': ['count', 'mean', 'sum'],
+    'frequency': 'mean',
+    'recency': 'mean'
+}).round(2)
+rfm_summary.columns = ['Count', 'Avg_CLV', 'Total_CLV', 'Avg_Frequency', 'Avg_Recency']
+rfm_summary = rfm_summary.sort_values('Total_CLV', ascending=False)
+rfm_summary.to_csv(os.path.join(REPORTS_DIR, "rfm_analysis.csv"))
+print(f"RFM Segments:\n{rfm_summary}")
+
+print("\n--- Revenue Contribution by Segment ---")
+segment_revenue = output.groupby('kmeans_cluster').agg({
+    'monetary': 'sum',
+    'clv': 'sum'
+}).rename(columns={'monetary': 'Total_Revenue', 'Total_CLV': 'Total_CLV'})
+segment_revenue['Revenue_Percentage'] = (segment_revenue['Total_Revenue'] / segment_revenue['Total_Revenue'].sum() * 100).round(2)
+segment_revenue['Segment_Name'] = [cluster_names[i] for i in segment_revenue.index]
+segment_revenue = segment_revenue[['Segment_Name', 'Total_Revenue', 'Revenue_Percentage']]
+segment_revenue.to_csv(os.path.join(REPORTS_DIR, "revenue_contribution.csv"))
+print(segment_revenue)
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+colors = plt.cm.Set2(np.linspace(0, 1, best_k))
+axes[0].pie(segment_revenue['Total_Revenue'], labels=segment_revenue['Segment_Name'], autopct='%1.1f%%', colors=colors)
+axes[0].set_title('Revenue Contribution by Segment')
+customer_counts = output.groupby('kmeans_cluster').size()
+axes[1].pie(customer_counts, labels=[cluster_names[i] for i in customer_counts.index], autopct='%1.1f%%', colors=colors)
+axes[1].set_title('Customer Distribution by Segment')
+plt.tight_layout()
+plt.savefig(os.path.join(FIG_DIR, "segment_distribution.png"), dpi=150)
+plt.close()
+
+print("\n--- Time-Based Analysis ---")
+df['InvoiceMonth'] = df['InvoiceDate'].dt.to_period('M')
+monthly_revenue = df.groupby('InvoiceMonth')['TotalPrice'].sum()
+monthly_orders = df.groupby('InvoiceMonth')['InvoiceNo'].nunique()
+monthly_customers = df.groupby('InvoiceMonth')['CustomerID'].nunique()
+
+time_analysis = pd.DataFrame({
+    'Month': monthly_revenue.index.astype(str),
+    'Revenue': monthly_revenue.values,
+    'Orders': monthly_orders.values,
+    'Customers': monthly_customers.values
+})
+time_analysis.to_csv(os.path.join(REPORTS_DIR, "time_analysis.csv"), index=False)
+print(f"Peak Revenue Month: {time_analysis.loc[time_analysis['Revenue'].idxmax(), 'Month']} (${time_analysis['Revenue'].max():,.0f})")
+print(f"Total Months: {len(time_analysis)}")
+
+plt.figure(figsize=(12, 4))
+plt.subplot(1, 2, 1)
+plt.plot(time_analysis['Month'], time_analysis['Revenue'], marker='o', color='green')
+plt.xticks(rotation=45)
+plt.title('Monthly Revenue Trend')
+plt.ylabel('Revenue ($)')
+plt.grid(True, alpha=0.3)
+plt.subplot(1, 2, 2)
+plt.bar(time_analysis['Month'], time_analysis['Customers'], color='blue', alpha=0.7)
+plt.xticks(rotation=45)
+plt.title('Monthly Active Customers')
+plt.ylabel('Customers')
+plt.tight_layout()
+plt.savefig(os.path.join(FIG_DIR, "time_trends.png"), dpi=150)
+plt.close()
+
+print("\n--- Country Analysis ---")
+country_revenue = df.groupby('Country').agg({
+    'TotalPrice': 'sum',
+    'CustomerID': 'nunique',
+    'InvoiceNo': 'nunique'
+}).rename(columns={'TotalPrice': 'Revenue', 'CustomerID': 'Customers', 'InvoiceNo': 'Orders'})
+country_revenue = country_revenue.sort_values('Revenue', ascending=False).head(10)
+country_revenue.to_csv(os.path.join(REPORTS_DIR, "country_analysis.csv"))
+print("Top 10 Countries by Revenue:")
+print(country_revenue)
 
 top_rules = rules.head(10)
 plt.figure(figsize=(10, 6))
